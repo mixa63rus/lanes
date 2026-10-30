@@ -22,8 +22,15 @@ export interface Task {
   logged: Record<ISODate, number>;
 }
 
+/** Поля задачи без дневных записей — их меняют отдельным запросом. */
+export type TaskMeta = Omit<Task, 'plan' | 'logged'>;
+
 export interface Project {
+  id: string;
   name: string;
   roles: Role[];
   tasks: Task[];
 }
+
+/** Проект целиком без id: импорт из файла, демо-данные. */
+export type ProjectDoc = Omit<Project, 'id'>;

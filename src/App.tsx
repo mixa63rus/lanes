@@ -1,8 +1,8 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { diffDays, todayISO, type ISODate } from './dates';
 import { computeSchedule, visibleRange } from './schedule';
-import { demoProject, normalize, useProject } from './store';
-import type { Role, Task } from './types';
+import { demoProject, normalize, useProjectSync, type ProjectActions } from './store';
+import type { Project, Task } from './types';
 import { DayEditor } from './components/DayEditor';
 import { RolesDialog } from './components/RolesDialog';
 import { Summary } from './components/Summary';
@@ -19,8 +19,30 @@ const ZOOMS = [
 ];
 
 export default function App() {
-  const [project, setProject] = useProject();
+  const { project, loadError, saveError, actions } = useProjectSync();
+
+  if (!project) {
+    return (
+      <div className="splash">
+        {loadError ? (
+          <>
+            <p>Не удалось связаться с сервером: {loadError}</p>
+            <p className="muted">Проверьте, что бэкенд запущен (<code>npm run dev</code>).</p>
+            <button className="btn btn-primary" onClick={actions.reload}>Повторить</button>
+          </>
+        ) : (
+          <p className="muted">Загрузка…</p>
+        )}
+      </div>
+    );
+  }
+
+  return <Workspace key={project.id} project={project} saveError={saveError} actions={actions} />;
+}
+
+function Workspace({ project, saveError, actions }: { project: Project; saveError: string | null; actions: ProjectActions }) {
   const [col, setCol] = useState(40);
+  const [name, setName] = useState(project.name);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [cell, setCell] = useState<CellTarget>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -40,42 +62,27 @@ export default function App() {
   // Прокручиваем к сегодняшнему дню при открытии и смене масштаба.
   useLayoutEffect(scrollToToday, [col]);
 
-  const patchTask = (id: string, fn: (t: Task) => Task) =>
-    setProject((p) => ({ ...p, tasks: p.tasks.map((t) => (t.id === id ? fn(t) : t)) }));
+  // Название с сервера могло поменяться (перечитали проект) — подхватываем.
+  const [syncedName, setSyncedName] = useState(project.name);
+  if (project.name !== syncedName) {
+    setSyncedName(project.name);
+    setName(project.name);
+  }
 
-  const saveTask = (task: Task) => {
-    setProject((p) => ({
-      ...p,
-      tasks: p.tasks.some((t) => t.id === task.id) ? p.tasks.map((t) => (t.id === task.id ? task : t)) : [...p.tasks, task],
-    }));
-    setDialog(null);
+  const commitName = () => {
+    const trimmed = name.trim();
+    if (!trimmed) setName(project.name);
+    else if (trimmed !== project.name) actions.rename(trimmed);
   };
 
-  const deleteTask = (id: string) => {
-    setProject((p) => ({ ...p, tasks: p.tasks.filter((t) => t.id !== id) }));
+  const closeAfter = <A extends unknown[]>(fn: (...args: A) => void) => (...args: A) => {
+    fn(...args);
     setDialog(null);
-  };
-
-  const saveRoles = (roles: Role[]) => {
-    setProject((p) => ({ ...p, roles, tasks: p.tasks.filter((t) => roles.some((r) => r.id === t.roleId)) }));
-    setDialog(null);
-  };
-
-  const saveDay = (taskId: string, date: ISODate, plan: number | null, logged: number | null) => {
-    patchTask(taskId, (t) => {
-      const nextPlan = { ...t.plan };
-      const nextLogged = { ...t.logged };
-      if (plan === null) delete nextPlan[date];
-      else nextPlan[date] = plan;
-      if (logged === null) delete nextLogged[date];
-      else nextLogged[date] = logged;
-      return { ...t, plan: nextPlan, logged: nextLogged };
-    });
-    setCell(null);
   };
 
   const exportJson = () => {
-    const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
+    const { id: _id, ...doc } = project;
+    const blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `${project.name || 'project'}.json`;
@@ -83,11 +90,11 @@ export default function App() {
     URL.revokeObjectURL(a.href);
   };
 
-  const importJson = async (file: File) => {
+  const replaceWith = async (load: () => Promise<unknown> | unknown) => {
     try {
-      setProject(normalize(JSON.parse(await file.text())));
+      await actions.replace(normalize(await load()));
     } catch (e) {
-      alert(`Не удалось импортировать: ${(e as Error).message}`);
+      alert(`Не удалось загрузить проект: ${(e as Error).message}`);
     }
   };
 
@@ -96,8 +103,9 @@ export default function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <input className="project-name" value={project.name}
-          onChange={(e) => setProject((p) => ({ ...p, name: e.target.value }))} aria-label="Название проекта" />
+        <input className="project-name" value={name} aria-label="Название проекта"
+          onChange={(e) => setName(e.target.value)} onBlur={commitName}
+          onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()} />
         <div className="toolbar">
           <button className="btn btn-primary" onClick={() => setDialog({ kind: 'task', task: null })}>+ Задача</button>
           <button className="btn" onClick={() => setDialog({ kind: 'roles' })}>Роли</button>
@@ -110,13 +118,24 @@ export default function App() {
           <button className="btn" onClick={scrollToToday}>Сегодня</button>
           <span className="sep" />
           <button className="btn btn-ghost" onClick={exportJson} title="Скачать проект в JSON">Экспорт</button>
-          <button className="btn btn-ghost" onClick={() => fileRef.current?.click()} title="Загрузить проект из JSON">Импорт</button>
+          <button className="btn btn-ghost" onClick={() => fileRef.current?.click()} title="Заменить проект данными из JSON">Импорт</button>
           <button className="btn btn-ghost"
-            onClick={() => confirm('Заменить текущий проект демо-данными?') && setProject(demoProject())}>Демо</button>
+            onClick={() => confirm('Заменить текущий проект демо-данными?') && replaceWith(demoProject)}>Демо</button>
           <input ref={fileRef} type="file" accept="application/json" hidden
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) importJson(f); e.target.value = ''; }} />
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f && confirm(`Заменить текущий проект данными из «${f.name}»?`)) replaceWith(async () => JSON.parse(await f.text()));
+              e.target.value = '';
+            }} />
         </div>
       </header>
+
+      {saveError && (
+        <div className="banner">
+          <span>{saveError}. Показаны данные с сервера.</span>
+          <button className="icon-btn" onClick={actions.dismissError} title="Скрыть">✕</button>
+        </div>
+      )}
 
       <Summary tasks={project.tasks} schedules={schedules} />
 
@@ -144,14 +163,18 @@ export default function App() {
 
       {cell && cellTask && (
         <DayEditor key={`${cell.taskId}-${cell.date}`} task={cellTask} date={cell.date} anchor={cell.anchor}
-          onSave={(plan, logged) => saveDay(cell.taskId, cell.date, plan, logged)} onClose={() => setCell(null)} />
+          onSave={(plan, logged) => {
+            actions.saveDay(cell.taskId, cell.date, plan, logged);
+            setCell(null);
+          }}
+          onClose={() => setCell(null)} />
       )}
       {dialog?.kind === 'task' && (
         <TaskDialog task={dialog.task} roles={project.roles} defaultRoleId={dialog.roleId}
-          onSave={saveTask} onDelete={deleteTask} onClose={() => setDialog(null)} />
+          onSave={closeAfter(actions.saveTask)} onDelete={closeAfter(actions.deleteTask)} onClose={() => setDialog(null)} />
       )}
       {dialog?.kind === 'roles' && (
-        <RolesDialog roles={project.roles} tasks={project.tasks} onSave={saveRoles} onClose={() => setDialog(null)} />
+        <RolesDialog roles={project.roles} tasks={project.tasks} onSave={closeAfter(actions.saveRoles)} onClose={() => setDialog(null)} />
       )}
     </div>
   );

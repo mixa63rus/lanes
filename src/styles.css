@@ -254,3 +254,13 @@ button, input, select { font: inherit; color: inherit; }
   .tl-scroll { margin: 0 12px; }
   .grid2 { grid-template-columns: 1fr; }
 }
+
+/* ---------- Загрузка и ошибки ---------- */
+
+.splash { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 16px; text-align: center; }
+.splash p { margin: 0; }
+.banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin: 12px 20px 0; padding: 8px 8px 8px 14px; border-radius: 10px;
+  background: rgba(229, 72, 77, 0.1); color: var(--neg); border: 1px solid rgba(229, 72, 77, 0.3);
+}

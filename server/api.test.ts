@@ -187,3 +187,13 @@ test('отметка о выполнении: ставится, пережива
   assert.equal((await get()).tasks[0].doneAt, null);
   assert.equal((await app.inject({ method: 'PUT', url: `/api/projects/${project.id}/tasks/nope/done`, payload: { doneAt: null } })).statusCode, 404);
 });
+
+test('пароль: без него и с неверным — 401, с верным — пускает', async () => {
+  const locked = buildApp({ db: openDb(':memory:'), auth: { user: 'lanes', password: 'секрет' } });
+  const basic = (s: string) => ({ authorization: `Basic ${Buffer.from(s).toString('base64')}` });
+  const none = await locked.inject({ url: '/api/projects' });
+  assert.equal(none.statusCode, 401);
+  assert.match(String(none.headers['www-authenticate']), /^Basic /);
+  assert.equal((await locked.inject({ url: '/api/projects', headers: basic('lanes:нет') })).statusCode, 401);
+  assert.equal((await locked.inject({ url: '/api/projects', headers: basic('lanes:секрет') })).statusCode, 200);
+});

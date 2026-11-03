@@ -1,5 +1,6 @@
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyServerOptions } from 'fastify';
+import { timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 import type { GroupTaskInput, ProjectDoc, Role, TaskGroup, TaskMeta } from '../src/types.ts';
@@ -100,10 +101,29 @@ export interface AppOptions {
   /** Папка со сборкой фронтенда; если есть — сервер отдаёт и её. */
   staticDir?: string;
   logger?: FastifyServerOptions['logger'];
+  /** Если задано — всё приложение закрыто паролем (HTTP Basic). */
+  auth?: { user: string; password: string };
 }
 
-export function buildApp({ db, staticDir, logger = false }: AppOptions) {
+const sameText = (a: string, b: string) => {
+  const x = Buffer.from(a);
+  const y = Buffer.from(b);
+  return x.length === y.length && timingSafeEqual(x, y);
+};
+
+export function buildApp({ db, staticDir, logger = false, auth }: AppOptions) {
   const app = Fastify({ logger, bodyLimit: 10 * 1024 * 1024 });
+
+  if (auth) {
+    const expected = `${auth.user}:${auth.password}`;
+    app.addHook('onRequest', async (req, reply) => {
+      const header = req.headers.authorization ?? '';
+      const given = header.startsWith('Basic ') ? Buffer.from(header.slice(6), 'base64').toString() : '';
+      if (!sameText(given, expected)) {
+        return reply.code(401).header('WWW-Authenticate', 'Basic realm="Lanes", charset="UTF-8"').send({ error: 'Unauthorized' });
+      }
+    });
+  }
   const repo = createRepo(db);
   const notFound = { statusCode: 404, error: 'Not Found', message: 'Проект или задача не найдены' };
 

@@ -11,7 +11,8 @@
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.server.json",
     "start": "node --disable-warning=ExperimentalWarning server/index.ts",
     "test": "node --test --disable-warning=ExperimentalWarning \"server/**/*.test.ts\"",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "public": "bash scripts/public.sh"
   },
   "dependencies": {
     "@fastify/static": "^10.1.8",

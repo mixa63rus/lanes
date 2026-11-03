@@ -10,6 +10,9 @@ const app = buildApp({
   db: openDb(dbPath),
   staticDir: resolve('dist'),
   logger: { level: process.env.LOG_LEVEL ?? 'info' },
+  auth: process.env.LANES_PASSWORD
+    ? { user: process.env.LANES_USER ?? 'lanes', password: process.env.LANES_PASSWORD }
+    : undefined,
 });
 
 app.listen({ port, host }).catch((err) => {

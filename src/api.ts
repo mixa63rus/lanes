@@ -1,5 +1,5 @@
 import type { ISODate } from './dates';
-import type { Project, ProjectDoc, Role, TaskMeta } from './types';
+import type { GroupTaskInput, Project, ProjectDoc, Role, TaskGroup, TaskMeta } from './types';
 
 export interface ProjectSummary {
   id: string;
@@ -37,6 +37,11 @@ export const api = {
   saveRoles: (id: string, roles: Role[]) => request<void>('PUT', `${p(id)}/roles`, roles),
   saveTask: (id: string, { id: taskId, ...task }: TaskMeta) => request<void>('PUT', t(id, taskId), task),
   deleteTask: (id: string, taskId: string) => request<void>('DELETE', t(id, taskId)),
+  saveGroup: (id: string, { id: groupId, ...group }: TaskGroup, tasks: GroupTaskInput[]) =>
+    request<void>('PUT', `${p(id)}/groups/${encodeURIComponent(groupId)}`, { ...group, tasks }),
+  deleteGroup: (id: string, groupId: string) => request<void>('DELETE', `${p(id)}/groups/${encodeURIComponent(groupId)}`),
+  setDone: (id: string, taskId: string, doneAt: ISODate | null) =>
+    request<void>('PUT', `${t(id, taskId)}/done`, { doneAt }),
   saveDay: (id: string, taskId: string, date: ISODate, plan: number | null, logged: number | null) =>
     request<void>('PUT', `${t(id, taskId)}/days/${date}`, { plan, logged }),
 };

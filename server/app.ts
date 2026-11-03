@@ -2,7 +2,7 @@ import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyServerOptions } from 'fastify';
 import { existsSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
-import type { ProjectDoc, Role, TaskMeta } from '../src/types.ts';
+import type { GroupTaskInput, ProjectDoc, Role, TaskGroup, TaskMeta } from '../src/types.ts';
 import { createRepo } from './db.ts';
 
 const id = { type: 'string', minLength: 1, maxLength: 64 } as const;
@@ -33,6 +33,31 @@ const taskProps = {
 } as const;
 const taskRequired = ['id', 'roleId', 'title', 'totalHours', 'startDate', 'hoursPerDay', 'deadline'];
 
+const groupProps = {
+  roleId: id,
+  title: { type: 'string', minLength: 1, maxLength: 200 },
+  startDate: date,
+  hoursPerDay: taskProps.hoursPerDay,
+} as const;
+const groupRequired = ['roleId', 'title', 'startDate', 'hoursPerDay'];
+
+const groupBodySchema = {
+  type: 'object',
+  required: [...groupRequired, 'tasks'],
+  properties: {
+    ...groupProps,
+    tasks: {
+      type: 'array',
+      maxItems: 1000,
+      items: {
+        type: 'object',
+        required: ['id', 'title', 'totalHours'],
+        properties: { id, title: taskProps.title, totalHours: taskProps.totalHours, deadline: { ...taskProps.deadline, default: null } },
+      },
+    },
+  },
+} as const;
+
 const projectName = { type: 'string', minLength: 1, maxLength: 200 } as const;
 const documentSchema = {
   type: 'object',
@@ -40,13 +65,25 @@ const documentSchema = {
   properties: {
     name: projectName,
     roles: { type: 'array', maxItems: 100, items: roleSchema },
+    groups: {
+      type: 'array',
+      maxItems: 1000,
+      default: [],
+      items: { type: 'object', required: ['id', ...groupRequired], properties: { id, ...groupProps } },
+    },
     tasks: {
       type: 'array',
       maxItems: 5000,
       items: {
         type: 'object',
         required: taskRequired,
-        properties: { ...taskProps, plan: { ...dayMap, default: {} }, logged: { ...dayMap, default: {} } },
+        properties: {
+          ...taskProps,
+          groupId: { type: ['string', 'null'], maxLength: 64, default: null },
+          doneAt: { type: ['string', 'null'], pattern: date.pattern, default: null },
+          plan: { ...dayMap, default: {} },
+          logged: { ...dayMap, default: {} },
+        },
       },
     },
   },
@@ -55,6 +92,8 @@ const documentSchema = {
 type ProjectParams = { projectId: string };
 type TaskParams = ProjectParams & { taskId: string };
 type DayParams = TaskParams & { date: string };
+type GroupParams = ProjectParams & { groupId: string };
+type GroupBody = Omit<TaskGroup, 'id'> & { tasks: GroupTaskInput[] };
 
 export interface AppOptions {
   db: DatabaseSync;
@@ -116,8 +155,40 @@ export function buildApp({ db, staticDir, logger = false }: AppOptions) {
       },
     );
 
+    api.put<{ Params: GroupParams; Body: GroupBody }>(
+      '/projects/:projectId/groups/:groupId', { schema: { body: groupBodySchema } },
+      async (req, reply) => {
+        const { tasks, ...group } = req.body;
+        const ids = new Set(tasks.map((t) => t.id));
+        if (ids.size !== tasks.length) {
+          return reply.code(400).send({ statusCode: 400, error: 'Bad Request', message: 'Повторяющиеся id задач' });
+        }
+        const r = repo.saveGroup(req.params.projectId, { ...group, id: req.params.groupId }, tasks);
+        if (r === 'not-found') return reply.code(404).send(notFound);
+        if (r === 'bad-role') return reply.code(400).send({ statusCode: 400, error: 'Bad Request', message: 'Роль не из этого проекта' });
+        if (r === 'conflict') return reply.code(409).send({ statusCode: 409, error: 'Conflict', message: 'id группы или задачи занят' });
+        return reply.code(204).send();
+      },
+    );
+
+    api.delete<{ Params: GroupParams }>('/projects/:projectId/groups/:groupId', async (req, reply) =>
+      repo.deleteGroup(req.params.projectId, req.params.groupId) ? reply.code(204).send() : reply.code(404).send(notFound));
+
     api.delete<{ Params: TaskParams }>('/projects/:projectId/tasks/:taskId', async (req, reply) =>
       repo.deleteTask(req.params.projectId, req.params.taskId) ? reply.code(204).send() : reply.code(404).send(notFound));
+
+    api.put<{ Params: TaskParams; Body: { doneAt: string | null } }>(
+      '/projects/:projectId/tasks/:taskId/done',
+      {
+        schema: {
+          body: { type: 'object', required: ['doneAt'], properties: { doneAt: { type: ['string', 'null'], pattern: date.pattern } } },
+        },
+      },
+      async (req, reply) =>
+        repo.setDone(req.params.projectId, req.params.taskId, req.body.doneAt)
+          ? reply.code(204).send()
+          : reply.code(404).send(notFound),
+    );
 
     api.put<{ Params: DayParams; Body: { plan: number | null; logged: number | null } }>(
       '/projects/:projectId/tasks/:taskId/days/:date',

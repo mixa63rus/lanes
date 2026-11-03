@@ -5,7 +5,7 @@ import type { Task } from '../types';
 export function Summary({ tasks, schedules }: { tasks: Task[]; schedules: Map<string, TaskSchedule> }) {
   if (!tasks.length) return null;
   const all = tasks.map((t) => schedules.get(t.id)!);
-  const total = tasks.reduce((s, t) => s + t.totalHours, 0);
+  const total = all.reduce((s, x) => s + x.scope, 0);
   const logged = all.reduce((s, x) => s + x.logged, 0);
   const deviation = all.reduce((s, x) => s + x.deviation, 0);
   const latest = (pick: (s: TaskSchedule) => ISODate | null) =>

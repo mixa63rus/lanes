@@ -1,6 +1,6 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import { fmtShort, todayISO } from '../dates';
-import { computeSchedule } from '../schedule';
+import { computeSchedule, fmtH, lastWorkDate } from '../schedule';
 import { uid } from '../store';
 import type { Role, Task } from '../types';
 import { parseHours } from './DayEditor';
@@ -21,16 +21,17 @@ export function TaskDialog({ task, roles, defaultRoleId, onSave, onDelete, onClo
   const [start, setStart] = useState(task?.startDate ?? todayISO());
   const [perDay, setPerDay] = useState(String(task?.hoursPerDay ?? 8));
   const [deadline, setDeadline] = useState(task?.deadline ?? '');
+  const [doneAt, setDoneAt] = useState(task?.doneAt ?? '');
 
   const draft: Task | null = useMemo(() => {
     const t = parseHours(total);
     const p = parseHours(perDay);
     if (!title.trim() || !roleId || !start || t === null || t <= 0 || p === null || p <= 0 || p > 24) return null;
     return {
-      id: task?.id ?? uid(), plan: task?.plan ?? {}, logged: task?.logged ?? {},
+      id: task?.id ?? uid(), groupId: null, doneAt: doneAt || null, plan: task?.plan ?? {}, logged: task?.logged ?? {},
       title: title.trim(), roleId, totalHours: t, startDate: start, hoursPerDay: p, deadline: deadline || null,
     };
-  }, [task, title, roleId, total, start, perDay, deadline]);
+  }, [task, title, roleId, total, start, perDay, deadline, doneAt]);
 
   const preview = draft && computeSchedule(draft, todayISO());
 
@@ -76,8 +77,19 @@ export function TaskDialog({ task, roles, defaultRoleId, onSave, onDelete, onClo
                 <input type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
               </label>
             </div>
+            <div className="done-field">
+              <label className="check">
+                <input type="checkbox" checked={!!doneAt}
+                  onChange={(e) => setDoneAt(e.target.checked ? lastWorkDate(task) : '')} />
+                Задача выполнена
+              </label>
+              {doneAt && <input type="date" value={doneAt} onChange={(e) => setDoneAt(e.target.value)} aria-label="Дата выполнения" />}
+            </div>
             <p className="hint">
-              {preview?.planEnd
+              {preview?.status === 'done' && doneAt
+                ? <>Выполнена {fmtShort(doneAt)}: ушло {fmtH(preview.logged)} ч из {fmtH(draft!.totalHours)} по оценке.
+                    {' '}Остаток больше не планируется.</>
+                : preview?.planEnd
                 ? <>По плану закончим <b>{fmtShort(preview.planEnd)}</b>
                     {preview.forecastEnd && preview.forecastEnd !== preview.planEnd &&
                       <>, по прогнозу — <b>{fmtShort(preview.forecastEnd)}</b></>}.

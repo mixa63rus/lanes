@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './api';
 import { addDays, isWeekend, todayISO, type ISODate } from './dates';
-import type { Project, ProjectDoc, Role, Task } from './types';
+import type { GroupTaskInput, Project, ProjectDoc, Role, Task, TaskGroup } from './types';
 
 /** Здесь жил проект до появления сервера — переносим его при первом запуске. */
 const LEGACY_KEY = 'lanes.project.v1';
@@ -18,6 +18,13 @@ export function normalize(raw: unknown): ProjectDoc {
   const roles: Role[] = p.roles.map((r) => ({
     id: String(r.id), name: String(r.name ?? 'Роль'), color: String(r.color ?? PALETTE[0]),
   }));
+  const groups: TaskGroup[] = (Array.isArray(p.groups) ? p.groups : []).map((g) => ({
+    id: String(g.id),
+    roleId: String(g.roleId),
+    title: String(g.title ?? 'Группа'),
+    startDate: String(g.startDate),
+    hoursPerDay: Number(g.hoursPerDay) || 8,
+  }));
   const tasks: Task[] = p.tasks.map((t) => ({
     id: String(t.id),
     roleId: String(t.roleId),
@@ -26,10 +33,12 @@ export function normalize(raw: unknown): ProjectDoc {
     startDate: String(t.startDate),
     hoursPerDay: Number(t.hoursPerDay) || 0,
     deadline: t.deadline ? String(t.deadline) : null,
+    groupId: t.groupId && groups.some((g) => g.id === t.groupId) ? String(t.groupId) : null,
+    doneAt: t.doneAt ? String(t.doneAt) : null,
     plan: { ...(t.plan ?? {}) },
     logged: { ...(t.logged ?? {}) },
   }));
-  return { name: String(p.name ?? 'Мой проект'), roles, tasks };
+  return { name: String(p.name ?? 'Мой проект'), roles, groups, tasks };
 }
 
 function storage(key: string, value?: string | null): string | null {
@@ -121,15 +130,62 @@ export function useProjectSync() {
   const actions = {
     rename: (name: string) => sync((p) => ({ ...p, name }), (id) => api.renameProject(id, name)),
 
-    saveTask: ({ plan: _plan, logged: _logged, ...meta }: Task) =>
+    /** Задача вне группы; если поменялась отметка о выполнении — сохраняем и её. */
+    saveTask: ({ plan: _plan, logged: _logged, groupId: _groupId, doneAt, ...meta }: Task) => {
+      const before = project?.tasks.find((t) => t.id === meta.id);
+      const doneChanged = (before?.doneAt ?? null) !== doneAt;
       sync(
         (p) => ({
           ...p,
           tasks: p.tasks.some((t) => t.id === meta.id)
-            ? p.tasks.map((t) => (t.id === meta.id ? { ...t, ...meta } : t))
-            : [...p.tasks, { ...meta, plan: {}, logged: {} }],
+            ? p.tasks.map((t) => (t.id === meta.id ? { ...t, ...meta, doneAt } : t))
+            : [...p.tasks, { ...meta, groupId: null, doneAt, plan: {}, logged: {} }],
         }),
-        (id) => api.saveTask(id, meta),
+        async (id) => {
+          await api.saveTask(id, meta);
+          if (doneChanged) await api.setDone(id, meta.id, doneAt);
+        },
+      );
+    },
+
+    /** Отметить задачу выполненной на дату или снять отметку (null). */
+    setDone: (taskId: string, doneAt: ISODate | null) =>
+      sync(
+        (p) => ({ ...p, tasks: p.tasks.map((t) => (t.id === taskId ? { ...t, doneAt } : t)) }),
+        (id) => api.setDone(id, taskId, doneAt),
+      ),
+
+    /** Группа и её очередь задач целиком; задачи группы, которых нет в списке, удаляются. */
+    saveGroup: (group: TaskGroup, queue: GroupTaskInput[]) =>
+      sync(
+        (p) => {
+          const old = new Map(p.tasks.map((t) => [t.id, t]));
+          const tasks: Task[] = queue.map((q) => ({
+            ...q,
+            roleId: group.roleId,
+            startDate: group.startDate,
+            hoursPerDay: group.hoursPerDay,
+            groupId: group.id,
+            doneAt: old.get(q.id)?.doneAt ?? null,
+            plan: old.get(q.id)?.plan ?? {},
+            logged: old.get(q.id)?.logged ?? {},
+          }));
+          const ids = new Set(queue.map((q) => q.id));
+          return {
+            ...p,
+            groups: p.groups.some((g) => g.id === group.id)
+              ? p.groups.map((g) => (g.id === group.id ? group : g))
+              : [...p.groups, group],
+            tasks: [...p.tasks.filter((t) => t.groupId !== group.id && !ids.has(t.id)), ...tasks],
+          };
+        },
+        (id) => api.saveGroup(id, group, queue),
+      ),
+
+    deleteGroup: (groupId: string) =>
+      sync(
+        (p) => ({ ...p, groups: p.groups.filter((g) => g.id !== groupId), tasks: p.tasks.filter((t) => t.groupId !== groupId) }),
+        (id) => api.deleteGroup(id, groupId),
       ),
 
     deleteTask: (taskId: string) =>
@@ -137,7 +193,12 @@ export function useProjectSync() {
 
     saveRoles: (roles: Role[]) =>
       sync(
-        (p) => ({ ...p, roles, tasks: p.tasks.filter((t) => roles.some((r) => r.id === t.roleId)) }),
+        (p) => ({
+          ...p,
+          roles,
+          groups: p.groups.filter((g) => roles.some((r) => r.id === g.roleId)),
+          tasks: p.tasks.filter((t) => roles.some((r) => r.id === t.roleId)),
+        }),
         (id) => api.saveRoles(id, roles),
       ),
 
@@ -196,29 +257,42 @@ export function demoProject(): ProjectDoc {
   const s1 = addDays(today, -14);
   const s2 = addDays(today, -9);
   const s3 = addDays(today, -4);
+  let yesterday = addDays(today, -1);
+  while (isWeekend(yesterday)) yesterday = addDays(yesterday, -1);
+  // Фронтендер параллельно с крупной задачей разбирает мелкие правки по 2 ч в день.
+  const fixes: TaskGroup = { id: uid(), roleId: front, title: 'Правки после демо', startDate: yesterday, hoursPerDay: 2 };
+  const fixTask = (title: string, totalHours: number, logged: Record<ISODate, number> = {}): Task => ({
+    id: uid(), roleId: front, title, totalHours, startDate: fixes.startDate, hoursPerDay: fixes.hoursPerDay,
+    deadline: null, groupId: fixes.id, doneAt: null, plan: {}, logged,
+  });
   return {
     name: 'Личный кабинет клиента',
     roles,
+    groups: [fixes],
     tasks: [
+      { ...fixTask('Опечатки в формах', 1, { [fixes.startDate]: 1 }), doneAt: fixes.startDate },
+      fixTask('Кнопка «Назад» на мобильных', 1.5, { [fixes.startDate]: 1 }),
+      fixTask('Сортировка в истории заказов', 3),
+      fixTask('Фильтр по датам', 8),
       {
-        id: uid(), roleId: design, title: 'Макеты личного кабинета', totalHours: 48,
-        startDate: s1, hoursPerDay: 6, deadline: null, plan: {}, logged: logPattern(s1, addDays(s1, 11), [6, 7, 5, 6]),
+        id: uid(), roleId: design, title: 'Макеты личного кабинета', totalHours: 60,
+        startDate: s1, hoursPerDay: 6, deadline: null, groupId: null, doneAt: addDays(s1, 10), plan: {}, logged: logPattern(s1, addDays(s1, 11), [6, 7, 5, 6]),
       },
       {
         id: uid(), roleId: back, title: 'API авторизации и профиля', totalHours: 96,
-        startDate: s2, hoursPerDay: 8, deadline: null, plan: {}, logged: logPattern(s2, today, [6, 5, 7, 6]),
+        startDate: s2, hoursPerDay: 8, deadline: null, groupId: null, doneAt: null, plan: {}, logged: logPattern(s2, today, [6, 5, 7, 6]),
       },
       {
         id: uid(), roleId: back, title: 'Интеграция с платёжкой', totalHours: 40,
-        startDate: addDays(today, 10), hoursPerDay: 8, deadline: null, plan: {}, logged: {},
+        startDate: addDays(today, 10), hoursPerDay: 8, deadline: null, groupId: null, doneAt: null, plan: {}, logged: {},
       },
       {
         id: uid(), roleId: front, title: 'Экраны личного кабинета', totalHours: 80,
-        startDate: s3, hoursPerDay: 6, deadline: addDays(today, 18), plan: {}, logged: logPattern(s3, today, [8, 7, 8]),
+        startDate: s3, hoursPerDay: 6, deadline: addDays(today, 18), groupId: null, doneAt: null, plan: {}, logged: logPattern(s3, today, [8, 7, 8]),
       },
       {
         id: uid(), roleId: qa, title: 'Тест-план и регресс', totalHours: 32,
-        startDate: addDays(today, 12), hoursPerDay: 4, deadline: addDays(today, 24), plan: {}, logged: {},
+        startDate: addDays(today, 12), hoursPerDay: 4, deadline: addDays(today, 24), groupId: null, doneAt: null, plan: {}, logged: {},
       },
     ],
   };

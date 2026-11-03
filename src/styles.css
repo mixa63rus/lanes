@@ -175,6 +175,46 @@ button, input, select { font: inherit; color: inherit; }
 .chip-behind, .chip-stalled { background: rgba(229, 72, 77, 0.12); color: var(--neg); }
 .chip-notstarted { background: var(--grid); color: var(--muted); }
 
+/* Отметка о выполнении */
+.task-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.task-head .task-title { min-width: 0; }
+.done-toggle {
+  flex: none; width: 16px; height: 16px; padding: 0; border-radius: 50%; cursor: pointer;
+  border: 1.5px solid var(--border); background: var(--panel); color: transparent;
+  font-size: 10px; line-height: 1; font-weight: 700; display: grid; place-items: center;
+}
+.done-toggle:hover { border-color: var(--pos); color: var(--pos); }
+.done-toggle[aria-pressed='true'] { background: var(--pos); border-color: var(--pos); color: #fff; }
+.tl-row.is-done .task-title { color: var(--muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent); }
+.tl-row.is-done .tl-task-label:hover .task-title { color: var(--today); }
+.tl-row.is-done .task-progress > div { background: var(--pos); }
+.lg-done { width: 14px; height: 14px; border-radius: 50%; background: var(--pos); color: #fff; font-size: 9px; font-style: normal; font-weight: 700; display: inline-grid; place-items: center; }
+
+.done-field { display: flex; align-items: center; gap: 10px; min-height: 34px; }
+.check { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; }
+.check input { width: 16px; height: 16px; accent-color: var(--pos); margin: 0; }
+.done-field input[type='date'] { border: 1px solid var(--border); border-radius: 8px; padding: 5px 10px; background: var(--panel); }
+.group-line.is-done .gl-title { color: var(--muted); text-decoration: line-through; }
+.group-line.is-done .gl-when { color: var(--pos); }
+
+/* Группа задач: заголовок очереди и её задачи с отступом */
+.tl-queue-row { --row-h: 44px; background: color-mix(in srgb, var(--c) 4%, var(--panel)); }
+.tl-queue-label {
+  cursor: pointer; display: flex; flex-direction: column; justify-content: center; gap: 1px; padding-left: 32px;
+  background: color-mix(in srgb, var(--c) 4%, var(--panel));
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--c) 70%, transparent);
+}
+.tl-queue-label .task-title { font-weight: 650; }
+.tl-queue-label:hover .task-title { color: var(--today); }
+.tl-queue-row .bar-plan { background: color-mix(in srgb, var(--c) 8%, transparent); border-style: dashed; }
+.tl-row.in-queue .tl-task-label { padding-left: 46px; box-shadow: inset 3px 0 0 color-mix(in srgb, var(--c) 35%, transparent); }
+
+.btn-mini {
+  border: 1px solid var(--border); background: var(--panel); border-radius: 6px; padding: 2px 7px;
+  font-size: 12px; color: var(--muted); cursor: pointer; white-space: nowrap; flex: none;
+}
+.btn-mini:hover { color: var(--text); border-color: var(--muted); }
+
 /* Полосы */
 .tl-bars { position: absolute; inset: 0; pointer-events: none; }
 .bar, .day-piece { position: absolute; top: calc((var(--row-h) - 28px) / 2); height: 28px; }
@@ -221,6 +261,7 @@ button, input, select { font: inherit; color: inherit; }
   width: min(480px, 100%); background: var(--panel); border-radius: 14px; box-shadow: var(--shadow);
   padding: 20px; display: flex; flex-direction: column; gap: 12px;
 }
+.dialog-wide { width: min(640px, 100%); max-height: calc(100vh - 32px); overflow: auto; }
 .dialog h2 { margin: 0 0 4px; font-size: 18px; }
 .dialog-actions { display: flex; gap: 8px; margin-top: 4px; }
 
@@ -243,6 +284,20 @@ button, input, select { font: inherit; color: inherit; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .hint { margin: 0; font-size: 13px; color: var(--muted); background: var(--bg); border-radius: 8px; padding: 8px 10px; }
 
+.group-lines { display: flex; flex-direction: column; gap: 4px; max-height: 45vh; overflow: auto; color: var(--text); }
+.group-line { display: flex; align-items: center; gap: 6px; }
+.group-line input {
+  border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; background: var(--panel); min-width: 0;
+}
+.group-line input:focus { outline: none; border-color: var(--today); box-shadow: 0 0 0 3px var(--today-bg); }
+.group-line.is-invalid input { border-color: color-mix(in srgb, var(--neg) 60%, transparent); }
+.gl-num { width: 18px; flex: none; text-align: right; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+/* Перебиваем общее .field input { width: 100% } — иначе каждый инпут строки занимает всю ширину. */
+.field .group-line .gl-title { flex: 1 1 auto; width: auto; }
+.field .group-line .gl-hours { flex: none; width: 64px; text-align: right; }
+.gl-when { width: 110px; flex: none; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gl-actions { display: flex; width: 78px; flex: none; }
+
 .roles-list { display: flex; flex-direction: column; gap: 6px; max-height: 50vh; overflow: auto; }
 .role-edit { display: flex; align-items: center; gap: 6px; }
 .role-edit input[type='color'] { width: 32px; height: 32px; padding: 0; border: none; background: none; cursor: pointer; flex: none; }
@@ -253,6 +308,7 @@ button, input, select { font: inherit; color: inherit; }
   .topbar, .summary, .legend { padding-left: 12px; padding-right: 12px; }
   .tl-scroll { margin: 0 12px; }
   .grid2 { grid-template-columns: 1fr; }
+  .gl-when { display: none; }
 }
 
 /* ---------- Загрузка и ошибки ---------- */

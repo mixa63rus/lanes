@@ -7,6 +7,8 @@ interface Props {
   task: Task;
   date: ISODate;
   anchor: DOMRect;
+  /** Для задачи из группы — сколько часов на этот день выделила очередь; план вручную тогда не меняется. */
+  groupPlan?: number;
   /** plan: null — вернуть норму; logged: null — убрать запись. */
   onSave: (plan: number | null, logged: number | null) => void;
   onClose: () => void;
@@ -20,9 +22,9 @@ export const parseHours = (s: string): number | null => {
   return s.trim() === '' || !Number.isFinite(n) || n < 0 ? null : n;
 };
 
-export function DayEditor({ task, date, anchor, onSave, onClose }: Props) {
+export function DayEditor({ task, date, anchor, groupPlan, onSave, onClose }: Props) {
   const norm = isWeekend(date) ? 0 : task.hoursPerDay;
-  const [plan, setPlan] = useState(fmtH(capacityOn(task, date)));
+  const [plan, setPlan] = useState(fmtH(groupPlan ?? capacityOn(task, date)));
   const [logged, setLogged] = useState(task.logged[date] !== undefined ? fmtH(task.logged[date]) : '');
 
   const left = Math.max(8, Math.min(anchor.left - W / 2 + anchor.width / 2, window.innerWidth - W - 8));
@@ -31,7 +33,7 @@ export function DayEditor({ task, date, anchor, onSave, onClose }: Props) {
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const p = parseHours(plan) ?? norm;
-    onSave(p === norm ? null : p, parseHours(logged));
+    onSave(groupPlan !== undefined || p === norm ? null : p, parseHours(logged));
   };
 
   return (
@@ -47,10 +49,14 @@ export function DayEditor({ task, date, anchor, onSave, onClose }: Props) {
           <strong>{fmtLong(date)}</strong>
           <span className="muted">{task.title}</span>
         </div>
-        <label className="field">
-          <span>План, ч <em className="muted">норма {fmtH(norm)}</em></span>
-          <input value={plan} onChange={(e) => setPlan(e.target.value)} inputMode="decimal" />
-        </label>
+        {groupPlan === undefined ? (
+          <label className="field">
+            <span>План, ч <em className="muted">норма {fmtH(norm)}</em></span>
+            <input value={plan} onChange={(e) => setPlan(e.target.value)} inputMode="decimal" />
+          </label>
+        ) : (
+          <p className="hint">План {fmtH(groupPlan)} ч — по очереди группы. Меняется через оценки и часы в день группы.</p>
+        )}
         <label className="field">
           <span>Отработано, ч</span>
           <div className="row">

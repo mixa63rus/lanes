@@ -1,15 +1,20 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { diffDays, todayISO, type ISODate } from './dates';
-import { computeSchedule, visibleRange } from './schedule';
+import { computeProjectSchedules, groupTasks, lastWorkDate, visibleRange } from './schedule';
 import { demoProject, normalize, useProjectSync, type ProjectActions } from './store';
-import type { Project, Task } from './types';
+import type { Project, Task, TaskGroup } from './types';
 import { DayEditor } from './components/DayEditor';
+import { GroupDialog } from './components/GroupDialog';
 import { RolesDialog } from './components/RolesDialog';
 import { Summary } from './components/Summary';
 import { TaskDialog } from './components/TaskDialog';
 import { LABEL_W, Timeline } from './components/Timeline';
 
-type Dialog = { kind: 'task'; task: Task | null; roleId?: string } | { kind: 'roles' } | null;
+type Dialog =
+  | { kind: 'task'; task: Task | null; roleId?: string }
+  | { kind: 'group'; group: TaskGroup | null; roleId?: string }
+  | { kind: 'roles' }
+  | null;
 type CellTarget = { taskId: string; date: ISODate; anchor: DOMRect } | null;
 
 const ZOOMS = [
@@ -49,10 +54,7 @@ function Workspace({ project, saveError, actions }: { project: Project; saveErro
   const fileRef = useRef<HTMLInputElement>(null);
   const today = todayISO();
 
-  const schedules = useMemo(
-    () => new Map(project.tasks.map((t) => [t.id, computeSchedule(t, today)])),
-    [project.tasks, today],
-  );
+  const schedules = useMemo(() => computeProjectSchedules(project, today), [project, today]);
   const range = useMemo(() => visibleRange(project.tasks, schedules, today), [project.tasks, schedules, today]);
 
   const scrollToToday = useCallback(() => {
@@ -100,6 +102,12 @@ function Workspace({ project, saveError, actions }: { project: Project; saveErro
 
   const cellTask = cell && project.tasks.find((t) => t.id === cell.taskId);
 
+  /** Клик по задаче из группы открывает группу целиком. */
+  const editTask = (task: Task) => {
+    const group = task.groupId && project.groups.find((g) => g.id === task.groupId);
+    setDialog(group ? { kind: 'group', group } : { kind: 'task', task });
+  };
+
   return (
     <div className="app">
       <header className="topbar">
@@ -108,6 +116,8 @@ function Workspace({ project, saveError, actions }: { project: Project; saveErro
           onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()} />
         <div className="toolbar">
           <button className="btn btn-primary" onClick={() => setDialog({ kind: 'task', task: null })}>+ Задача</button>
+          <button className="btn" onClick={() => setDialog({ kind: 'group', group: null })}
+            title="Несколько задач подряд: оценки в часах и лимит часов в день — календарь разложит их сам">+ Группа задач</button>
           <button className="btn" onClick={() => setDialog({ kind: 'roles' })}>Роли</button>
           <span className="sep" />
           <div className="segmented">
@@ -148,8 +158,11 @@ function Workspace({ project, saveError, actions }: { project: Project; saveErro
         col={col}
         scrollRef={scrollRef}
         onCellClick={(task, date, anchor) => setCell({ taskId: task.id, date, anchor })}
-        onEditTask={(task) => setDialog({ kind: 'task', task })}
+        onEditTask={editTask}
         onAddTask={(roleId) => setDialog({ kind: 'task', task: null, roleId })}
+        onEditGroup={(group) => setDialog({ kind: 'group', group })}
+        onAddGroup={(roleId) => setDialog({ kind: 'group', group: null, roleId })}
+        onToggleDone={(task) => actions.setDone(task.id, task.doneAt ? null : lastWorkDate(task))}
       />
 
       <footer className="legend">
@@ -158,11 +171,13 @@ function Workspace({ project, saveError, actions }: { project: Project; saveErro
         <span><i className="lg lg-missed" /> день плана без факта</span>
         <span><i className="lg lg-slip" /> сдвиг прогноза за план</span>
         <span><i className="lg lg-deadline" /> дедлайн</span>
-        <span className="muted">Клик по дню — внести факт или поменять план. Клик по задаче — редактировать.</span>
+        <span><i className="lg lg-done">✓</i> выполнена — остаток оценки не планируется</span>
+        <span className="muted">Клик по дню — внести факт или поменять план. Клик по задаче — редактировать. Задачи группы идут по очереди в пределах её часов в день.</span>
       </footer>
 
       {cell && cellTask && (
         <DayEditor key={`${cell.taskId}-${cell.date}`} task={cellTask} date={cell.date} anchor={cell.anchor}
+          groupPlan={cellTask.groupId ? schedules.get(cellTask.id)?.planOn(cell.date) : undefined}
           onSave={(plan, logged) => {
             actions.saveDay(cell.taskId, cell.date, plan, logged);
             setCell(null);
@@ -172,6 +187,11 @@ function Workspace({ project, saveError, actions }: { project: Project; saveErro
       {dialog?.kind === 'task' && (
         <TaskDialog task={dialog.task} roles={project.roles} defaultRoleId={dialog.roleId}
           onSave={closeAfter(actions.saveTask)} onDelete={closeAfter(actions.deleteTask)} onClose={() => setDialog(null)} />
+      )}
+      {dialog?.kind === 'group' && (
+        <GroupDialog group={dialog.group} roles={project.roles} defaultRoleId={dialog.roleId}
+          tasks={dialog.group ? groupTasks(project.tasks, dialog.group.id) : []}
+          onSave={closeAfter(actions.saveGroup)} onDelete={closeAfter(actions.deleteGroup)} onClose={() => setDialog(null)} />
       )}
       {dialog?.kind === 'roles' && (
         <RolesDialog roles={project.roles} tasks={project.tasks} onSave={closeAfter(actions.saveRoles)} onClose={() => setDialog(null)} />
